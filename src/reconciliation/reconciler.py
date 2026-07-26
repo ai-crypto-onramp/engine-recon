@@ -116,7 +116,19 @@ class Reconciler:
         external_entries: list[ExternalEntry] | None = None,
     ) -> Any:
         """Run a recon cycle: create a run, match, detect breaks, complete."""
-        run = await self.repo.create_recon_run(source=source, scope=scope)
+        # Use a fresh session for this execute() call so the run + breaks
+        # + completion share a single transaction, and the commit doesn't
+        # leave the singleton session in a "prepared" state for the next
+        # request. The _LazyRepo exposes its session factory for this.
+        ensure = getattr(self.repo, "_ensure", None)
+        if ensure is not None:
+            await ensure()
+        session_factory = getattr(self.repo, "_session_factory", None)
+        if session_factory is not None:
+            repo = SqlRepository(session_factory())
+        else:
+            repo = self.repo
+        run = await repo.create_recon_run(source=source, scope=scope)
         if ledger_entries is not None:
             ledger = ledger_entries
         elif self.ledger_fetcher is not None:
@@ -149,7 +161,7 @@ class Reconciler:
             ledger, external, tolerance_seconds=self.settings.break_tolerance_seconds
         )
         created = await detect_and_persist_breaks(
-            self.repo,
+            repo,
             result,
             run_id=run.id,
             source=source,
@@ -160,10 +172,10 @@ class Reconciler:
         matched = len(result.matched) + sum(1 for b in result.balances if b.matched)
         unmatched = len(result.unmatched_ledger) + len(result.unmatched_external)
         breaks = len(created)
-        completed_run = await self.repo.complete_recon_run(
+        completed_run = await repo.complete_recon_run(
             run.id, matched=matched, unmatched=unmatched, breaks=breaks
         )
-        await self.repo.commit()
+        await repo.commit()
         return completed_run if completed_run is not None else run
 
     async def get_run(self, run_id: uuid.UUID) -> Any | None:
@@ -321,8 +333,9 @@ class Reconciler:
             actor="system",
             after={"run_id": run_id, "classification": brk.classification},
         )
-        await self.producer.send("break-alert", alert.model_dump(mode="json"), key=str(brk.id))
-        await self.producer.send(
+        await _safe_send(self.producer, "break-alert", alert.model_dump(mode="json"), key=str(brk.id))
+        await _safe_send(
+            self.producer,
             AUDIT_TOPIC,
             audit_envelope(audit.model_dump(mode="json"), brk.id),
             key=str(brk.id),
@@ -336,11 +349,26 @@ class Reconciler:
             before=event.get("before", {}),
             after=event.get("after", {}),
         )
-        await self.producer.send(
+        await _safe_send(
+            self.producer,
             AUDIT_TOPIC,
             audit_envelope(audit.model_dump(mode="json"), event["break_id"]),
-            key=str(event["break_id"])
+            key=str(event["break_id"]),
         )
+
+
+async def _safe_send(producer: Any, topic: str, payload: dict[str, Any], key: str | None = None) -> None:
+    """Send to the producer, degrading gracefully if it isn't started.
+
+    In dev mode the Kafka producer may be constructed but never started
+    (no broker available). ``AioKafkaProducer.send`` asserts the producer
+    is started, which would crash every recon run that emits breaks.
+    Log a warning and continue so the recon run completes regardless.
+    """
+    try:
+        await producer.send(topic, payload, key=key)
+    except Exception as e:  # noqa: BLE001 - don't crash recon on emit failure
+        logger.warning("failed to emit %s to topic %s: %s", key, topic, e)
 
 
 class _LazyRepo:

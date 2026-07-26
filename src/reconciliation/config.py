@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_IN_MEMORY_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+
+def _dev_mode() -> bool:
+    return os.environ.get("DEV_MODE") == "1"
+
+
+def _default_db_url() -> str:
+    raw = os.environ.get("DB_URL", "")
+    if raw:
+        return raw
+    return _IN_MEMORY_DB_URL if _dev_mode() else ""
+
+
+def _default_enable_kafka() -> bool:
+    raw = os.environ.get("ENABLE_KAFKA", "")
+    if raw:
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(os.environ.get("KAFKA_BROKERS", "").strip())
 
 
 class Settings(BaseSettings):
@@ -21,7 +43,7 @@ class Settings(BaseSettings):
     )
 
     port: int = 8080
-    db_url: str = "sqlite+aiosqlite:///:memory:"
+    db_url: str = Field(default_factory=_default_db_url)
     kafka_brokers: str = ""
     reports_bucket: str = ""
     break_tolerance_seconds: int = 300
@@ -33,7 +55,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     # Test-friendly knobs.
-    enable_kafka: bool = False
+    enable_kafka: bool = Field(default_factory=_default_enable_kafka)
 
     # External service URLs.
     ledger_url: str = ""

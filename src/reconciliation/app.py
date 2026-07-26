@@ -9,6 +9,7 @@ tests can inject in-memory fakes.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any
@@ -33,81 +34,108 @@ init_tracing()
 
 logger = logging.getLogger(__name__)
 
+_IN_MEMORY_DB_URL = "sqlite+aiosqlite:///:memory:"
+
 # ---------------------------------------------------------------------------
-# Readiness checks (preserved from the original scaffolding).
+# Readiness checks.
+#
+# In DEV_MODE the original behaviour is preserved (all checks return True) so
+# the local harness and the test suite keep booting without real dependencies.
+# In production the checks reflect the actually wired dependencies: the DB
+# must be a real (non in-memory) DSN, and Kafka must be enabled with brokers
+# configured. Every other upstream source feed is treated as "down" until a
+# real probe is implemented — returning False is safer than lying "ok".
 # ---------------------------------------------------------------------------
+
+
+def _dev_mode() -> bool:
+    return os.environ.get("DEV_MODE") == "1"
+
+
+def _prod_db_ready() -> bool:
+    settings = get_settings()
+    return bool(settings.db_url) and settings.db_url != _IN_MEMORY_DB_URL
+
+
+def _prod_mq_ready() -> bool:
+    settings = get_settings()
+    return bool(settings.kafka_brokers) and bool(settings.enable_kafka)
+
+
+def _dev_or(_real: Any) -> bool:
+    return True if _dev_mode() else _real()
 
 
 def ledger_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def db_ready() -> bool:
-    return True
+    return _dev_or(_prod_db_ready)
 
 
 def mq_ready() -> bool:
-    return True
+    return _dev_or(_prod_mq_ready)
 
 
 def source_feeds_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def exchange_feeds_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def blockchain_feeds_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def rail_feeds_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def pricing_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def fx_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def liquidity_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def treasury_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def wallet_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def mpc_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def identity_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def policy_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def audit_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def notification_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 def aml_ready() -> bool:
-    return True
+    return _dev_or(lambda: False)
 
 
 READINESS_CHECKS = [
@@ -176,6 +204,25 @@ def create_app(reconciler: Reconciler | None = None) -> FastAPI:
         app.state.reconciler = None
         app.state.producer = InMemoryProducer()
         app.state.storage = build_storage(get_settings())
+
+        @app.on_event("startup")
+        async def _enforce_prod_requirements() -> None:
+            if os.environ.get("DEV_MODE") == "1":
+                return
+            settings = get_settings()
+            missing: list[str] = []
+            if not settings.db_url or settings.db_url == _IN_MEMORY_DB_URL:
+                missing.append("DB_URL")
+            if not settings.kafka_brokers:
+                missing.append("KAFKA_BROKERS")
+            if not settings.enable_kafka:
+                missing.append("ENABLE_KAFKA")
+            if missing:
+                logger.error(
+                    "required env vars missing in production mode: %s — set DEV_MODE=1 for local dev",
+                    ", ".join(missing),
+                )
+                raise SystemExit(1)
 
         @app.on_event("startup")
         async def _init_db() -> None:

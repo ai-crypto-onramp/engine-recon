@@ -5,6 +5,11 @@ from httpx import ASGITransport
 from reconciliation.app import READINESS_CHECKS, app, classify_readiness, readiness_report
 
 
+@pytest.fixture(autouse=True)
+def _dev_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEV_MODE", "1")
+
+
 @pytest.mark.asyncio
 async def test_healthz_ok():
     async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
@@ -32,6 +37,21 @@ def test_readiness_report_all_ok():
     assert failed == 0
     assert total == len(READINESS_CHECKS)
     assert results["ledger"] == "ok"
+
+
+def test_readiness_report_prod_all_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    monkeypatch.delenv("DB_URL", raising=False)
+    monkeypatch.delenv("KAFKA_BROKERS", raising=False)
+    monkeypatch.delenv("ENABLE_KAFKA", raising=False)
+    from reconciliation.config import reset_settings
+
+    reset_settings()
+    results, failed, total = readiness_report()
+    assert total == len(READINESS_CHECKS)
+    assert failed == total
+    assert results["db"] == "down"
+    assert results["mq"] == "down"
 
 
 def test_readiness_report_with_failure(monkeypatch):

@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from .authtoken import require_token
 from .config import get_settings
 from .kafka import InMemoryProducer
 from .reconciler import Reconciler
@@ -195,6 +196,15 @@ def create_app(reconciler: Reconciler | None = None) -> FastAPI:
     """
     app = FastAPI(title="Reconciliation", version="0.1.0")
     instrument_app(app)
+
+    @app.middleware("http")
+    async def _service_token_auth(request: Request, call_next):
+        try:
+            await require_token(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content=exc.detail)
+        return await call_next(request)
+
     app.state.ledger_consumer = None
     if reconciler is not None:
         app.state.reconciler = reconciler

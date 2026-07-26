@@ -4,7 +4,8 @@ pytest
 httpx
 pytest-cov
 pytest-asyncio
-sqlalchemy>=2.0
+sqlalchemy[asyncio]>=2.0
+greenlet
 alembic
 aiosqlite
 asyncpg

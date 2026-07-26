@@ -124,6 +124,7 @@ class Reconciler:
         if ensure is not None:
             await ensure()
         session_factory = getattr(self.repo, "_session_factory", None)
+        repo: Repository
         if session_factory is not None:
             repo = SqlRepository(session_factory())
         else:

@@ -15,6 +15,13 @@ from reconciliation.db.models import Base
 from reconciliation.db.repository import Repository, SqlRepository
 
 
+@pytest.fixture(autouse=True)
+def _dev_mode_env(monkeypatch):
+    """Default to DEV_MODE=1 so the service-token auth middleware bypasses
+    auth in unit tests. Tests that exercise prod behavior delete DEV_MODE."""
+    monkeypatch.setenv("DEV_MODE", "1")
+
+
 def _new_uuid() -> uuid.UUID:
     """Generate a UUID; prefers v7 on Python 3.14+, falls back to v4."""
     gen = getattr(uuid, "uuid7", None)
